@@ -1,0 +1,42 @@
+# For future CI/integration testing (Phase 9 production-readiness audit,
+# section 21's "INTEGRATION TESTS ... require PostgreSQL, Redis, Docker
+# or equivalent"). NOT used by this project's local/unit test run --
+# nothing in this environment ran `docker compose` against this file
+# (no Docker binary here); it's provided so a CI runner (or a developer
+# with Docker available) can bring up disposable Postgres/Redis and
+# actually run tests/test_postgres_integration.py and `pytest -m postgres`
+# for real, instead of forever skipping them.
+#
+# Usage (on a machine with Docker):
+#   docker compose -f docker-compose.test.yml up -d
+#   TEST_DATABASE_URL=postgresql+psycopg://test:test@localhost:55432/test_db \
+#     REDIS_URL=redis://localhost:56379/0 \
+#     pytest -m postgres backend/tests/test_postgres_integration.py
+#   docker compose -f docker-compose.test.yml down -v
+
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: test_db
+    ports:
+      - "55432:5432"  # non-default host port -- coexists with a real docker-compose.yml postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    tmpfs:
+      - /var/lib/postgresql/data  # disposable -- no volume, wiped on `down`
+
+  redis-test:
+    image: redis:7-alpine
+    ports:
+      - "56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10

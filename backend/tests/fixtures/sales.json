@@ -1,0 +1,8 @@
+[
+    {"date": "2026-01-01", "region": "Delhi", "sales": 10000},
+    {"date": "2026-01-02", "region": "Mumbai", "sales": 15000},
+    {"date": "2026-01-03", "region": "Delhi", "sales": null},
+    {"date": "2026-01-04", "region": "Bangalore", "sales": 12000},
+    {"date": "2026-01-05", "region": "Mumbai", "sales": 9000},
+    {"date": "2026-01-06", "region": "Chennai", "sales": 8000}
+]

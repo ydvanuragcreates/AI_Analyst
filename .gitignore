@@ -1,0 +1,22 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Uploaded datasets (Phase 2)
+storage/
+
+# Node / frontend (added in a later phase)
+node_modules/
+.next/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

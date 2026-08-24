@@ -1,0 +1,7 @@
+date,region,product,quantity,revenue
+2026-01-01,Delhi,Widget,10,5000
+2026-01-02,Mumbai,Widget,8,4000
+2026-01-03,Delhi,Gadget,5,3000
+2026-01-04,Bangalore,Widget,12,6000
+2026-01-05,Mumbai,Gadget,6,3600
+2026-01-06,Chennai,Widget,4,2000
