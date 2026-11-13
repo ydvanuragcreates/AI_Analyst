@@ -6,7 +6,6 @@ import { useEffect, useRef, useState } from "react";
 import { API_URL } from "@/lib/env";
 import { queryKeys } from "@/lib/query-keys";
 import { consumeSSE } from "@/lib/sse";
-import { useAuthStore } from "@/stores/auth-store";
 import { TERMINAL_EVENT_TYPES, type AgentEventData, type EventType } from "@/types/events";
 
 export interface StreamEvent {
@@ -49,7 +48,7 @@ export function useAnalysisStream(analysisId: string | undefined, enabled: boole
   useEffect(() => {
     // No setState directly in this top-level effect body anywhere below
     // (react-hooks/set-state-in-effect) -- every state update, including
-    // the "not authenticated" and "reset for a new run" cases, happens
+    // the "reset for a new run" case, happens
     // inside the `run()` async function instead, mirroring how
     // `connect()`'s own updates (inside callbacks/promise continuations)
     // were already exempt. `run()` still starts executing synchronously
@@ -69,12 +68,11 @@ export function useAnalysisStream(analysisId: string | undefined, enabled: boole
     const controller = new AbortController();
     reconnectAttemptedRef.current = false;
 
-    async function connect(token: string) {
+    async function connect() {
       setConnectionStatus("connecting");
       try {
         await consumeSSE(`${API_URL}/api/v1/analysis/${currentAnalysisId}/stream`, {
           signal: controller.signal,
-          headers: { Authorization: `Bearer ${token}` },
           onEvent: (eventType, data) => {
             setConnectionStatus("open");
             setEvents((previous) => [...previous, { eventType, data, receivedAt: Date.now() }]);
@@ -99,7 +97,7 @@ export function useAnalysisStream(analysisId: string | undefined, enabled: boole
         if (!reconnectAttemptedRef.current) {
           reconnectAttemptedRef.current = true;
           setTimeout(() => {
-            if (!controller.signal.aborted) void connect(token);
+            if (!controller.signal.aborted) void connect();
           }, 2000);
           return;
         }
@@ -110,15 +108,9 @@ export function useAnalysisStream(analysisId: string | undefined, enabled: boole
     }
 
     async function run() {
-      const token = useAuthStore.getState().token;
-      if (!token) {
-        setConnectionStatus("error");
-        setError("Not authenticated.");
-        return;
-      }
       setEvents([]);
       setError(null);
-      await connect(token);
+      await connect();
     }
 
     void run();

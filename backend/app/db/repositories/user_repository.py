@@ -1,5 +1,4 @@
-"""Database access for User -- no business logic (that's services/auth_service.py
-via api/routes/auth.py), just typed CRUD over AsyncSession."""
+"""Database access for User -- just typed CRUD over AsyncSession."""
 
 import uuid
 
@@ -24,4 +23,8 @@ class UserRepository:
 
     async def get_by_email(self, email: str) -> User | None:
         result = await self._session.execute(select(User).where(User.email == email))
+        return result.scalar_one_or_none()
+
+    async def get_oldest(self) -> User | None:
+        result = await self._session.execute(select(User).order_by(User.created_at, User.id).limit(1))
         return result.scalar_one_or_none()

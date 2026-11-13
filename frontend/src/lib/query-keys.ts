@@ -4,7 +4,6 @@ import type { AnalysisHistoryParams } from "@/types/analysis";
  * its keys from here so invalidation (e.g. after upload/create/delete)
  * never has to guess another hook's key shape. */
 export const queryKeys = {
-  me: () => ["me"] as const,
 
   datasets: () => ["datasets"] as const,
   dataset: (datasetId: string) => ["datasets", datasetId] as const,

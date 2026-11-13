@@ -10,14 +10,24 @@ import type { DatasetProfile } from "@/types/dataset";
  */
 export function buildSuggestedQuestions(profile: DatasetProfile): string[] {
   const suggestions: string[] = [];
-  const numeric = profile.numeric_columns[0];
-  const categorical = profile.categorical_columns[0];
+
+  // Row numbers and customer/order IDs are technically numeric but never
+  // a meaningful thing to sum/rank/correlate -- suggesting "What is the
+  // total SNo?" is worse than suggesting nothing, so identifier-like
+  // columns (profiling_service.py's is_likely_identifier) are excluded
+  // before picking which columns to build suggestions from.
+  const identifierNames = new Set(profile.columns.filter((c) => c.is_likely_identifier).map((c) => c.name));
+  const meaningfulNumeric = profile.numeric_columns.filter((name) => !identifierNames.has(name));
+  const meaningfulCategorical = profile.categorical_columns.filter((name) => !identifierNames.has(name));
+
+  const numeric = meaningfulNumeric[0];
+  const categorical = meaningfulCategorical[0];
   const date = profile.date_columns[0];
 
   if (numeric) suggestions.push(`What is the total ${numeric}?`);
   if (numeric && categorical) suggestions.push(`Which ${categorical} has the highest ${numeric}?`);
   if (numeric && date) suggestions.push(`Did ${numeric} increase over time?`);
-  if (profile.numeric_columns.length >= 2) suggestions.push(`Are ${profile.numeric_columns[0]} and ${profile.numeric_columns[1]} related?`);
+  if (meaningfulNumeric.length >= 2) suggestions.push(`Are ${meaningfulNumeric[0]} and ${meaningfulNumeric[1]} related?`);
   suggestions.push("Find anomalies in this dataset.");
 
   return suggestions.slice(0, 4);

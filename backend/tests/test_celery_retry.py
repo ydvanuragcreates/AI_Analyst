@@ -48,11 +48,10 @@ def client() -> TestClient:
 
 
 @pytest.fixture
-def registered_user(client: TestClient):
-    email = f"{uuid.uuid4().hex}@example.com"
-    response = client.post("/api/v1/auth/register", json={"email": email, "password": "supersecret123"})
-    token = response.json()["access_token"]
-    return {"headers": {"Authorization": f"Bearer {token}"}}
+def registered_user():
+    """Authentication is removed -- every request is the built-in local
+    user, so no headers are needed. Kept as a fixture so tests read the same."""
+    return {"headers": {}}
 
 
 @pytest.fixture

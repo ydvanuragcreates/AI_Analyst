@@ -52,6 +52,17 @@ class SchemaColumn(BaseModel):
 
     name: str
     type: str
+    sample_values: list[str] | None = Field(
+        default=None,
+        description=(
+            "The full set of distinct values, only populated for low-cardinality text "
+            "columns (see DuckDBService._distinct_values) -- lets the SQL-generation "
+            "prompt disambiguate near-duplicate categorical columns (e.g. two different "
+            "'state' columns using different labels for the same place) without ever "
+            "exposing row-level data. None for anything high-cardinality (free text, "
+            "IDs, PII) or non-text."
+        ),
+    )
 
 
 class DatasetSchema(BaseModel):

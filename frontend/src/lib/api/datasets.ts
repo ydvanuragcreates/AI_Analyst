@@ -1,6 +1,5 @@
 import { apiClient } from "@/lib/api/client";
 import { API_URL } from "@/lib/env";
-import { getAuthToken } from "@/stores/auth-store";
 import { ApiError } from "@/types/api";
 import type { DatasetProfile, DatasetV1ListResponse, DatasetV1Response } from "@/types/dataset";
 import type { DataQualityReport } from "@/types/deep-analysis";
@@ -23,8 +22,6 @@ function uploadWithProgress(file: File, onPhaseChange: (phase: UploadPhase, uplo
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_URL}/api/v1/datasets`);
-    const token = getAuthToken();
-    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
 
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) {

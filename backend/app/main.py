@@ -24,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.agent.graph import build_multi_agent_graph, checkpointer_context
-from app.api.routes import agent, analysis, analysis_jobs, approvals, auth, datasets, datasets_v1, health
+from app.api.routes import agent, analysis, analysis_jobs, approvals, datasets, datasets_v1, health
 from app.core.config import get_settings
 from app.core.context import get_request_id
 from app.core.errors import AppError
@@ -51,9 +51,9 @@ logger = logging.getLogger(__name__)
 # this raises a clear Pydantic ValidationError at startup.
 _settings = get_settings()
 
-# Fail fast, part two: ENVIRONMENT=production with Postgres/Redis/JWT
-# secret missing or insecure must refuse to start, not silently fall
-# back to InMemorySaver/eager Celery/a forgeable default secret. No-op
+# Fail fast, part two: ENVIRONMENT=production with Postgres/Redis
+# missing must refuse to start, not silently fall
+# back to InMemorySaver/eager Celery. No-op
 # outside production -- see core/startup_checks.py.
 enforce_production_requirements(_settings)
 
@@ -98,8 +98,8 @@ app.add_middleware(RequestIDMiddleware)
 # typically in production too) to call this API from a browser at all --
 # without this, every request from the browser fails the CORS preflight
 # before it ever reaches a route. Origins are configured, never wildcard,
-# so credentials (the Authorization header) can still be sent -- browsers
-# reject `Access-Control-Allow-Origin: *` combined with credentials.
+# so credentialed requests still work -- browsers reject
+# `Access-Control-Allow-Origin: *` combined with credentials.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_settings.cors_allowed_origins_list,
@@ -117,12 +117,11 @@ app.include_router(approvals.router, prefix="/api/analysis", tags=["approvals"])
 
 # Phase 9 routers. NOT mounted as "/api/v1" duplicates of the routers
 # above -- /api/v1/analysis and /api/v1/datasets are genuinely different
-# contracts (job-based, authenticated, owned), not a path-prefix rename
+# contracts (job-based, persisted), not a path-prefix rename
 # of the synchronous/unauthenticated Phase 1-8 ones, so dual-mounting the
 # old routers under /api/v1 would create colliding, ambiguous routes
 # rather than the harmless compatibility aliases the spec allows for.
 app.include_router(health.root_router, tags=["health"])
-app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(datasets_v1.router, prefix="/api/v1/datasets", tags=["datasets-v1"])
 app.include_router(analysis_jobs.router, prefix="/api/v1/analysis", tags=["analysis-v1"])
 

@@ -9,8 +9,9 @@ truth other modules depend on.
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # backend/app/core/config.py -> parents[3] is the project root (d:/ai_knowledge),
@@ -40,13 +41,37 @@ class Settings(BaseSettings):
     def cors_allowed_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
 
-    openai_api_key: str
+    llm_provider: Literal["openai", "ollama"] = Field(
+        default="openai",
+        description="Which LLM backend every agent uses. 'ollama' = a free local model for "
+        "development/testing; 'openai' = the paid hosted model. Switching needs only this env "
+        "var (plus that provider's settings below) -- no agent code changes.",
+    )
+
+    openai_api_key: str | None = Field(default=None, description="Required when LLM_PROVIDER=openai")
     openai_model: str = Field(default="gpt-5.4-mini")
     openai_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     openai_max_output_tokens: int = Field(
         default=4096, description="Caps a single LLM call's output -- without this, nothing bounds how many "
         "tokens one agent call (or a runaway/looping model reply) can generate"
     )
+
+    ollama_base_url: str = Field(
+        default="http://localhost:11434/v1", description="Ollama's OpenAI-compatible endpoint (note the /v1)"
+    )
+    ollama_model: str = Field(default="qwen2.5:3b", description="Any model pulled with `ollama pull`")
+    llm_structured_output_retries: int = Field(
+        default=2, ge=0, le=5,
+        description="Local models only: how many times a reply that fails schema validation "
+        "(e.g. confidence=100 where the schema says 0-1) is sent back to the model with the "
+        "validation error to correct. Hosted OpenAI models are not wrapped.",
+    )
+
+    @model_validator(mode="after")
+    def _require_provider_credentials(self) -> "Settings":
+        if self.llm_provider == "openai" and not self.openai_api_key:
+            raise ValueError("OPENAI_API_KEY is required when LLM_PROVIDER=openai (or set LLM_PROVIDER=ollama for a local model)")
+        return self
 
     database_url: str | None = Field(
         default=None,
@@ -67,15 +92,10 @@ class Settings(BaseSettings):
     )
     cache_ttl_seconds: int = Field(default=300, description="Default TTL for cached values (e.g. dataset schema)")
 
-    jwt_secret_key: str = Field(default="change-me-in-production")
-    jwt_algorithm: str = Field(default="HS256")
-    access_token_expire_minutes: int = Field(default=60)
-
     analysis_rate_limit: str = Field(
         default="10/minute", description="Format '<count>/<window>', window one of second|minute|hour"
     )
     upload_rate_limit: str = Field(default="20/minute")
-    auth_rate_limit: str = Field(default="10/minute")
 
     analysis_timeout_seconds: int = Field(default=120, description="Hard ceiling on one analysis job's execution time")
     job_max_retries: int = Field(default=3, description="Bounded retries for transient (not permanent) job failures")

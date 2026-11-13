@@ -45,9 +45,9 @@ def _parse_limit(spec: str) -> tuple[int, int]:
 
 
 def _client_identity(request: Request) -> str:
-    """Authenticated requests are keyed by user_id (set by get_current_user
-    before this dependency runs, when both are used on the same route);
-    unauthenticated ones (register/login) fall back to the client IP."""
+    """Keyed by `request.state.user_id` when something upstream sets it;
+    otherwise (every request, now that authentication is removed) by the
+    client IP."""
 
     user_id = getattr(request.state, "user_id", None)
     if user_id:

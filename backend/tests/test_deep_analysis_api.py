@@ -12,7 +12,6 @@ call happens anywhere in this file.
 """
 
 import asyncio
-import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -67,12 +66,10 @@ def client() -> TestClient:
 
 
 @pytest.fixture
-def registered_user(client: TestClient):
-    email = f"{uuid.uuid4().hex}@example.com"
-    response = client.post("/api/v1/auth/register", json={"email": email, "password": "supersecret123"})
-    assert response.status_code == 201, response.text
-    token = response.json()["access_token"]
-    return {"email": email, "token": token, "headers": {"Authorization": f"Bearer {token}"}}
+def registered_user():
+    """Authentication is removed -- every request is the built-in local
+    user, so no headers are needed. Kept as a fixture so tests read the same."""
+    return {"headers": {}}
 
 
 @pytest.fixture
@@ -233,15 +230,6 @@ def test_dataset_quality_endpoint_returns_planted_issues(client: TestClient, reg
     assert "duplicate_rows" in issue_types
 
 
-def test_other_users_dataset_quality_is_hidden(client: TestClient, registered_user, dataset) -> None:
-    other_email = f"{uuid.uuid4().hex}@example.com"
-    other = client.post("/api/v1/auth/register", json={"email": other_email, "password": "supersecret123"})
-    other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
-
-    response = client.get(f"/api/v1/datasets/{dataset['dataset_id']}/quality", headers=other_headers)
-    assert response.status_code == 404
-
-
 def test_dataset_profile_endpoint_is_cached(client: TestClient, registered_user, dataset, fake_redis) -> None:
     first = client.get(f"/api/v1/datasets/{dataset['dataset_id']}/profile", headers=registered_user["headers"])
     assert first.status_code == 200
@@ -293,12 +281,3 @@ def test_analysis_history_filters_by_mode(client: TestClient, registered_user, d
 
     both = client.get("/api/v1/analysis", headers=registered_user["headers"])
     assert both.json()["total"] == 2
-
-
-def test_other_users_dataset_profile_is_hidden(client: TestClient, registered_user, dataset) -> None:
-    other_email = f"{uuid.uuid4().hex}@example.com"
-    other = client.post("/api/v1/auth/register", json={"email": other_email, "password": "supersecret123"})
-    other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
-
-    response = client.get(f"/api/v1/datasets/{dataset['dataset_id']}/profile", headers=other_headers)
-    assert response.status_code == 404

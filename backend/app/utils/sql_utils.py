@@ -51,7 +51,7 @@ def validate_query(query: str) -> exp.Expression:
     get executable SQL), or raises QueryValidationError.
     """
 
-    stripped = query.strip().rstrip(";").strip()
+    stripped = normalize_identifier_quotes(query.strip().rstrip(";").strip())
     if not stripped:
         raise QueryValidationError("Query must not be empty")
 
@@ -95,6 +95,49 @@ def render_for_execution(statement: exp.Expression, real_table_name: str) -> str
 
     rewritten = statement.transform(_rename)
     return rewritten.sql(dialect="duckdb")
+
+
+def normalize_identifier_quotes(query: str) -> str:
+    """Rewrite MySQL-style `backtick` identifiers as DuckDB "double-quoted" ones.
+
+    LLMs (small local ones especially) often write `State / City` even
+    when shown "State / City". DuckDB and sqlglot's DuckDB dialect reject
+    backticks outright, so this can never change the meaning of a query
+    that would otherwise run -- it only rescues ones that would fail to
+    parse. Text inside '...' string literals and "..." identifiers is
+    copied unchanged; the result still goes through every validation rule.
+    """
+
+    if "`" not in query:
+        return query
+
+    out: list[str] = []
+    i, n = 0, len(query)
+    while i < n:
+        ch = query[i]
+        if ch in ("'", '"'):
+            # Copy a quoted run verbatim; a doubled quote is an escape.
+            j = i + 1
+            while j < n:
+                if query[j] == ch:
+                    if j + 1 < n and query[j + 1] == ch:
+                        j += 2
+                        continue
+                    break
+                j += 1
+            out.append(query[i : j + 1])
+            i = j + 1
+        elif ch == "`":
+            end = query.find("`", i + 1)
+            if end == -1:  # unbalanced -- leave it for the parser to reject
+                out.append(query[i:])
+                break
+            out.append(quote_identifier(query[i + 1 : end]))
+            i = end + 1
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
 
 
 def quote_identifier(identifier: str) -> str:

@@ -57,19 +57,18 @@ def _final(**overrides) -> AnalysisResponse:
     return AnalysisResponse(**defaults)
 
 
-def _patch_worker_graph(monkeypatch, *, reviewer_model=None, share_checkpointer=False):
+def _patch_worker_graph(monkeypatch, *, reviewer_model=None, simulate_restart_between_jobs=False):
     """Replace the worker's real (OpenAI-backed) graph construction with
     one built entirely from FakeStructuredModel -- see agent/graph.py's
     build_multi_agent_graph, unchanged; only the *models* passed to it
     are swapped here.
 
-    `share_checkpointer=True` is only for the human-approval resume
-    test: the worker's real checkpointer_context() hands out a FRESH
-    InMemorySaver() per call (correct in production, where Postgres is
-    what actually persists a thread across two separate task
-    invocations) -- there is no Postgres here, so a resume test needs
-    the initial run's task and the resume task to share one in-memory
-    checkpointer explicitly instead.
+    `simulate_restart_between_jobs=True` hands every job a FRESH
+    InMemorySaver, i.e. what a backend restart between the approval
+    pause and the resume looks like in local (no-Postgres) mode. Without
+    it, the worker's real checkpointer_context() is used: one
+    process-wide InMemorySaver, which is what lets a resume find the
+    paused thread.
     """
 
     import app.workers.analysis_worker as worker
@@ -91,18 +90,16 @@ def _patch_worker_graph(monkeypatch, *, reviewer_model=None, share_checkpointer=
 
     monkeypatch.setattr(worker, "build_multi_agent_graph", fake_build)
 
-    if share_checkpointer:
+    if simulate_restart_between_jobs:
         from contextlib import asynccontextmanager
 
         from langgraph.checkpoint.memory import InMemorySaver
 
-        shared = InMemorySaver()
-
         @asynccontextmanager
-        async def fake_checkpointer_context(database_url):
-            yield shared
+        async def fresh_checkpointer_context(database_url):
+            yield InMemorySaver()
 
-        monkeypatch.setattr(worker, "checkpointer_context", fake_checkpointer_context)
+        monkeypatch.setattr(worker, "checkpointer_context", fresh_checkpointer_context)
 
 
 @pytest.fixture
@@ -111,12 +108,10 @@ def client() -> TestClient:
 
 
 @pytest.fixture
-def registered_user(client: TestClient):
-    email = f"{uuid.uuid4().hex}@example.com"
-    response = client.post("/api/v1/auth/register", json={"email": email, "password": "supersecret123"})
-    assert response.status_code == 201, response.text
-    token = response.json()["access_token"]
-    return {"email": email, "token": token, "headers": {"Authorization": f"Bearer {token}"}}
+def registered_user():
+    """Authentication is removed -- every request is the built-in local
+    user, so no headers are needed. Kept as a fixture so tests read the same."""
+    return {"headers": {}}
 
 
 @pytest.fixture
@@ -125,51 +120,6 @@ def dataset(client: TestClient, registered_user):
         response = client.post("/api/v1/datasets", files={"file": ("sales.csv", fh, "text/csv")}, headers=registered_user["headers"])
     assert response.status_code == 201, response.text
     return response.json()
-
-
-# ------------------------------------------------------------------ #
-# AUTH
-# ------------------------------------------------------------------ #
-
-
-def test_register_returns_access_token(client: TestClient) -> None:
-    response = client.post("/api/v1/auth/register", json={"email": f"{uuid.uuid4().hex}@example.com", "password": "supersecret123"})
-    assert response.status_code == 201
-    assert response.json()["access_token"]
-
-
-def test_register_duplicate_email_rejected(client: TestClient, registered_user) -> None:
-    response = client.post("/api/v1/auth/register", json={"email": registered_user["email"], "password": "supersecret123"})
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
-
-
-def test_login_success(client: TestClient, registered_user) -> None:
-    response = client.post("/api/v1/auth/login", json={"email": registered_user["email"], "password": "supersecret123"})
-    assert response.status_code == 200
-    assert response.json()["access_token"]
-
-
-def test_login_invalid_password_returns_401(client: TestClient, registered_user) -> None:
-    response = client.post("/api/v1/auth/login", json={"email": registered_user["email"], "password": "wrong-password"})
-    assert response.status_code == 401
-    assert response.json()["error"]["code"] == "AUTHENTICATION_ERROR"
-
-
-def test_protected_endpoint_without_token_returns_401(client: TestClient) -> None:
-    response = client.get("/api/v1/auth/me")
-    assert response.status_code == 401
-
-
-def test_protected_endpoint_with_garbage_token_returns_401(client: TestClient) -> None:
-    response = client.get("/api/v1/auth/me", headers={"Authorization": "Bearer not-a-real-token"})
-    assert response.status_code == 401
-
-
-def test_me_returns_current_user(client: TestClient, registered_user) -> None:
-    response = client.get("/api/v1/auth/me", headers=registered_user["headers"])
-    assert response.status_code == 200
-    assert response.json()["email"] == registered_user["email"]
 
 
 # ------------------------------------------------------------------ #
@@ -220,15 +170,6 @@ def test_upload_oversized_file_rejected(client: TestClient, registered_user) -> 
         app.dependency_overrides.pop(get_dataset_service, None)
 
     assert response.status_code == 400
-
-
-def test_dataset_ownership_hides_other_users_dataset(client: TestClient, dataset) -> None:
-    other = client.post("/api/v1/auth/register", json={"email": f"{uuid.uuid4().hex}@example.com", "password": "supersecret123"})
-    other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
-
-    response = client.get(f"/api/v1/datasets/{dataset['dataset_id']}", headers=other_headers)
-    assert response.status_code == 404
-    assert response.json()["error"]["code"] == "DATASET_NOT_FOUND"
 
 
 def test_get_dataset_v1_returns_owned_metadata(client: TestClient, registered_user, dataset) -> None:
@@ -423,31 +364,6 @@ def test_idempotency_key_conflict_on_different_question(client: TestClient, regi
     assert conflict.json()["error"]["code"] == "IDEMPOTENCY_KEY_CONFLICT"
 
 
-def test_idempotency_key_from_different_user_does_not_collide(client: TestClient, registered_user, dataset, monkeypatch) -> None:
-    """A different user reusing the exact same Idempotency-Key string is
-    a completely unrelated request -- the (user_id, idempotency_key)
-    unique constraint (db/models/analysis.py) is scoped per-user, not global."""
-
-    _patch_worker_graph(monkeypatch)
-    other = client.post("/api/v1/auth/register", json={"email": f"{uuid.uuid4().hex}@example.com", "password": "supersecret123"})
-    other_headers = {"Authorization": f"Bearer {other.json()['access_token']}", "Idempotency-Key": "shared-key-string"}
-
-    with open("tests/fixtures/sales.csv", "rb") as fh:
-        other_dataset = client.post("/api/v1/datasets", files={"file": ("sales.csv", fh, "text/csv")}, headers=other_headers).json()
-
-    first = client.post(
-        "/api/v1/analysis", json={"dataset_id": dataset["dataset_id"], "question": "Which region has the highest sales?"},
-        headers={**registered_user["headers"], "Idempotency-Key": "shared-key-string"},
-    )
-    second = client.post(
-        "/api/v1/analysis", json={"dataset_id": other_dataset["dataset_id"], "question": "Which region has the highest sales?"},
-        headers=other_headers,
-    )
-
-    assert first.status_code == 202 and second.status_code == 202
-    assert first.json()["analysis_id"] != second.json()["analysis_id"]
-
-
 def test_expired_idempotency_key_is_treated_as_a_new_request(client: TestClient, registered_user, dataset, monkeypatch) -> None:
     """Verify expired idempotency keys are handled safely: an old key
     past Settings.idempotency_key_ttl_seconds is freed for reuse (a new
@@ -502,18 +418,6 @@ def test_analysis_history_invalid_page_size_rejected(client: TestClient, registe
     assert response.status_code == 422
 
 
-def test_analysis_ownership_hides_other_users_analysis(client: TestClient, registered_user, dataset, monkeypatch) -> None:
-    _patch_worker_graph(monkeypatch)
-    created = client.post("/api/v1/analysis", json={"dataset_id": dataset["dataset_id"], "question": "Which region has the highest sales?"}, headers=registered_user["headers"])
-    analysis_id = created.json()["analysis_id"]
-
-    other = client.post("/api/v1/auth/register", json={"email": f"{uuid.uuid4().hex}@example.com", "password": "supersecret123"})
-    other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
-
-    response = client.get(f"/api/v1/analysis/{analysis_id}", headers=other_headers)
-    assert response.status_code == 404
-
-
 def test_cancel_already_completed_analysis_returns_completed(client: TestClient, registered_user, dataset, monkeypatch) -> None:
     _patch_worker_graph(monkeypatch)
     created = client.post("/api/v1/analysis", json={"dataset_id": dataset["dataset_id"], "question": "Which region has the highest sales?"}, headers=registered_user["headers"])
@@ -535,11 +439,14 @@ def test_approve_when_not_waiting_rejected(client: TestClient, registered_user, 
 
 def test_human_approval_interrupt_and_resume_via_worker(client: TestClient, registered_user, dataset, monkeypatch) -> None:
     """Low reviewer confidence pauses the job at waiting_for_approval;
-    approving resumes the SAME checkpointed thread (via a shared
-    InMemorySaver -- see _patch_worker_graph's share_checkpointer) and
-    reaches completed."""
+    approving resumes the SAME checkpointed thread and reaches completed.
 
-    _patch_worker_graph(monkeypatch, reviewer_model=FakeStructuredModel(_review(confidence=0.5)), share_checkpointer=True)
+    Regression: this used to patch in a shared checkpointer, which hid
+    that the real local-mode checkpointer_context() gave each job a fresh
+    one -- so in the real app every approval failed with LangGraph's
+    "Must write to at least one of [...]". It now uses the real one."""
+
+    _patch_worker_graph(monkeypatch, reviewer_model=FakeStructuredModel(_review(confidence=0.5)))
 
     created = client.post("/api/v1/analysis", json={"dataset_id": dataset["dataset_id"], "question": "Which region has the highest sales?"}, headers=registered_user["headers"])
     analysis_id = created.json()["analysis_id"]
@@ -551,6 +458,24 @@ def test_human_approval_interrupt_and_resume_via_worker(client: TestClient, regi
     approved = client.post(f"/api/v1/analysis/{analysis_id}/approve", json={"approved": True}, headers=registered_user["headers"])
     assert approved.status_code == 200
     assert approved.json()["status"] == "completed"
+
+
+def test_resume_after_lost_checkpoint_fails_with_clear_message(client: TestClient, registered_user, dataset, monkeypatch) -> None:
+    """If the paused state is gone (local mode + backend restart), approving
+    must fail with an explanation, not LangGraph's cryptic error."""
+
+    _patch_worker_graph(monkeypatch, reviewer_model=FakeStructuredModel(_review(confidence=0.5)), simulate_restart_between_jobs=True)
+
+    created = client.post("/api/v1/analysis", json={"dataset_id": dataset["dataset_id"], "question": "Which region has the highest sales?"}, headers=registered_user["headers"])
+    analysis_id = created.json()["analysis_id"]
+    assert created.json()["status"] == "waiting_for_approval"
+
+    client.post(f"/api/v1/analysis/{analysis_id}/approve", json={"approved": True}, headers=registered_user["headers"])
+
+    detail = client.get(f"/api/v1/analysis/{analysis_id}", headers=registered_user["headers"]).json()
+    assert detail["status"] == "failed"
+    assert "paused state was lost" in detail["error"]
+    assert "Must write to at least one of" not in detail["error"]
 
 
 def test_stream_for_already_completed_analysis_returns_terminal_event_without_redis(
@@ -607,7 +532,6 @@ def test_stream_without_redis_for_a_still_running_analysis_returns_422(client: T
     assert response.status_code == 422
 
 
-
 # ------------------------------------------------------------------ #
 # REDIS: rate limiting, caching
 # ------------------------------------------------------------------ #
@@ -616,12 +540,14 @@ def test_stream_without_redis_for_a_still_running_analysis_returns_422(client: T
 def test_rate_limit_blocks_after_configured_count(client: TestClient, registered_user, monkeypatch, fake_redis) -> None:
     from app.core.config import get_settings
 
-    monkeypatch.setattr(get_settings(), "auth_rate_limit", "2/minute")
+    monkeypatch.setattr(get_settings(), "upload_rate_limit", "2/minute")
 
-    email = registered_user["email"]
-    responses = [client.post("/api/v1/auth/login", json={"email": email, "password": "wrong"}) for _ in range(3)]
+    responses = [
+        client.post("/api/v1/datasets", files={"file": ("notes.txt", b"hello", "text/plain")}, headers=registered_user["headers"])
+        for _ in range(3)
+    ]
 
-    assert [r.status_code for r in responses[:2]] == [401, 401]
+    assert [r.status_code for r in responses[:2]] == [400, 400]
     assert responses[2].status_code == 429
     assert responses[2].json()["error"]["code"] == "RATE_LIMIT_EXCEEDED"
 

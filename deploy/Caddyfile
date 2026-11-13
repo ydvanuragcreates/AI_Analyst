@@ -1,0 +1,14 @@
+# HTTPS reverse proxy for the API. Caddy obtains and renews a Let's Encrypt
+# certificate for API_DOMAIN automatically (ports 80 and 443 must be open).
+# No domain? Use <server-ip-with-dashes>.sslip.io, e.g. 203-0-113-7.sslip.io
+{$API_DOMAIN} {
+	encode gzip
+	# Uploads up to MAX_FILE_SIZE_MB (default 50) plus multipart overhead.
+	request_body {
+		max_size 60MB
+	}
+	# flush_interval -1 keeps Server-Sent Events (/api/v1/analysis/{id}/stream) streaming live.
+	reverse_proxy api:8000 {
+		flush_interval -1
+	}
+}

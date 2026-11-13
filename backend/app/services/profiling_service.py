@@ -69,6 +69,17 @@ class ProfilingService:
 
         row_count, missing_distinct = self._row_count_and_missing_distinct(dataset_id, columns_meta)
 
+        # A column that's 100% missing carries no information regardless of
+        # what its DuckDB dtype says -- an entirely-empty source column
+        # commonly registers as DOUBLE (pandas' default dtype for an
+        # all-NaN column), which _classify() would otherwise call
+        # "numeric". Without this override it shows up as a real numeric/
+        # categorical column in the UI and gets offered as a genuine
+        # analysis target even though every value in it is missing.
+        columns_meta = [
+            (n, t, "other" if missing_distinct.get(n, (0, 0))[1] == 0 else k) for n, t, k in columns_meta
+        ]
+
         # Dataset ingestion (services/dataset_service.py) never converts a
         # date-looking CSV/XLSX/JSON column to a real datetime dtype
         # before registering it in DuckDB -- it arrives here as VARCHAR,

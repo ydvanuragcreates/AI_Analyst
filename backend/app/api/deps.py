@@ -1,49 +1,51 @@
 """
-Shared FastAPI dependencies for the Phase 9 v1 API: the authenticated
-user and a couple of small request-validation helpers used across
-several v1 routes.
+Shared FastAPI dependencies for the v1 API: the (single, built-in) local
+user and a couple of small request-validation helpers used across several
+v1 routes.
+
+Authentication has been removed. Datasets and analyses are still stored
+with a `user_id` (the schema and every repository's ownership filter are
+unchanged), but that id now always belongs to one automatically-created
+local user rather than to whoever logged in.
 """
 
-from fastapi import Depends, Request
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import AuthenticationError, ValidationError
-from app.core.security import InvalidTokenError, decode_access_token
+from app.core.errors import ValidationError
 from app.db.models.user import User
 from app.db.repositories.user_repository import UserRepository
 from app.db.session import get_db_session
 
-_bearer_scheme = HTTPBearer(auto_error=False)
+LOCAL_USER_EMAIL = "local@localhost"
 
 
-async def get_current_user(
-    request: Request,
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
-    session: AsyncSession = Depends(get_db_session),
-) -> User:
-    """Resolve the caller's User from the `Authorization: Bearer <token>`
-    header, or raise AuthenticationError (401).
+async def get_current_user(session: AsyncSession = Depends(get_db_session)) -> User:
+    """Return the built-in local user, creating it on first use.
 
-    Also stamps `request.state.user_id` -- middleware/rate_limit.py reads
-    this to key rate limits per-user instead of per-IP on authenticated
-    routes, without this dependency needing to know anything about rate
-    limiting itself.
+    If the database already has users (from before authentication was
+    removed), the oldest one is reused so its existing datasets and
+    analyses stay visible. No credentials are read. Rate limiting falls back to the client IP
+    because `request.state.user_id` is intentionally not set here (every
+    caller shares this one user, so a per-user key would be a single
+    global bucket).
     """
 
-    if credentials is None:
-        raise AuthenticationError("Missing Authorization header")
+    repo = UserRepository(session)
+    user = await repo.get_oldest()
+    if user is not None:
+        return user
 
     try:
-        user_id = decode_access_token(credentials.credentials)
-    except InvalidTokenError as exc:
-        raise AuthenticationError(f"Invalid or expired token: {exc}") from None
-
-    user = await UserRepository(session).get_by_id(user_id)
-    if user is None:
-        raise AuthenticationError("User no longer exists")
-
-    request.state.user_id = str(user.id)
+        # No password: nothing ever logs in as this user.
+        user = await repo.create(email=LOCAL_USER_EMAIL, password_hash="")
+        await session.commit()
+    except IntegrityError:
+        # Two first-ever requests raced to create it; the other one won.
+        await session.rollback()
+        user = await repo.get_oldest()
+        assert user is not None
     return user
 
 

@@ -167,6 +167,12 @@ Rules:
   CREATE, or any other write or filesystem-access statement.
 - Use ONLY columns that appear in the supplied schema. Never invent a
   column name.
+- Write every column name exactly as the schema shows it, INCLUDING its
+  double quotes, e.g. "State / City" or "Product Price" -- never State,
+  City or State_City. Unquoted, a name with spaces or symbols is not one
+  column (State / City would mean State divided by City).
+- Text values in a WHERE clause go in single quotes and must match the
+  schema's listed values exactly, e.g. "State / City" = 'Delhi_Ncr'.
 - Refer to the dataset as table name 'dataset' -- this is a fixed alias
   the execution layer resolves internally; never write the real table
   name (you do not know it, and do not need to).

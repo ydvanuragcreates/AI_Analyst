@@ -320,6 +320,10 @@ def resume_analysis_job(self, analysis_id: str, approved: bool, feedback: str | 
         _run_async(_mark_failed(analysis_id, str(exc) or "The analysis could not be completed."), request_id=request_id)
 
 
+class AnalysisStateLostError(RuntimeError):
+    """A resume was requested but no paused checkpoint exists for the thread."""
+
+
 async def _resume_analysis_job(analysis_id: str, approved: bool, feedback: str | None) -> None:
     settings = get_settings()
     session_factory = get_session_factory()
@@ -411,6 +415,17 @@ async def _stream_graph_run(session: AsyncSession, analysis: Analysis, settings:
     cancelled = False
     async with checkpointer_context(settings.database_url) as checkpointer:
         graph = build_multi_agent_graph(checkpointer=checkpointer)
+
+        if isinstance(graph_input, Command) and not (await graph.aget_state(config)).next:
+            # Nothing is paused under this thread (in local mode: the
+            # backend restarted after the pause, and the in-memory
+            # checkpoint went with it). Resuming would only fail with
+            # LangGraph's cryptic "Must write to at least one of [...]".
+            raise AnalysisStateLostError(
+                "This analysis can no longer be resumed: its paused state was lost, most likely "
+                "because the backend restarted while it was waiting for approval. Please ask the "
+                "question again."
+            )
 
         async for update in graph.astream(graph_input, config=config, stream_mode="updates"):
             for node_name in update:

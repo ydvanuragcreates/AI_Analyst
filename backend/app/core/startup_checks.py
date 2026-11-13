@@ -10,9 +10,7 @@ a silent correctness/security hazard: a misconfigured `DATABASE_URL`
 would silently downgrade every analysis to a non-persistent
 `InMemorySaver` (losing all state on the next restart, without warning);
 a missing `REDIS_URL` would silently run Celery in-process (no real
-background jobs at all) and disable rate limiting; a default/short
-`JWT_SECRET_KEY` would let anyone who reads this repository's source
-forge valid tokens against a real deployment.
+background jobs at all) and disable rate limiting;
 
 `enforce_production_requirements` is the one place that turns "silently
 degraded" into "refuses to start" -- called once at process startup, by
@@ -22,9 +20,6 @@ either process, not partway through serving its first request.
 """
 
 from app.core.config import Settings
-
-_INSECURE_JWT_DEFAULTS = {"change-me-in-production", "secret", "changeme", ""}
-_MIN_JWT_SECRET_LENGTH = 32
 
 
 class ProductionConfigurationError(RuntimeError):
@@ -64,18 +59,6 @@ def enforce_production_requirements(settings: Settings) -> None:
             "and the SSE event transport (without it, GET /api/v1/analysis/{id}/stream cannot work)."
         )
 
-    if not settings.jwt_secret_key or settings.jwt_secret_key.lower() in _INSECURE_JWT_DEFAULTS:
-        errors.append(
-            "JWT_SECRET_KEY must be set to a real secret in production -- it is currently unset "
-            "or a known default value, which would let anyone who has read this source forge "
-            "valid access tokens for any user."
-        )
-    elif len(settings.jwt_secret_key) < _MIN_JWT_SECRET_LENGTH:
-        errors.append(
-            f"JWT_SECRET_KEY is only {len(settings.jwt_secret_key)} characters; production requires "
-            f"at least {_MIN_JWT_SECRET_LENGTH} (matches PyJWT's own HMAC-SHA256 recommendation) -- "
-            "a short key is brute-forceable."
-        )
 
     if errors:
         formatted = "\n".join(f"  - {error}" for error in errors)

@@ -31,7 +31,7 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(createQueryClient);
 
   return (
-    <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider delayDuration={200}>
           {children}

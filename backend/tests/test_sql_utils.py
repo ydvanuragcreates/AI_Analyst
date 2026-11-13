@@ -120,3 +120,33 @@ def test_render_for_execution_substitutes_in_cte_and_join() -> None:
     rendered = render_for_execution(statement, real_table_name="dataset_xyz789")
 
     assert rendered.lower().count("dataset_xyz789") == 2
+
+
+# ------------------------------------------------------------------ #
+# Backtick identifiers (MySQL habit common in LLM-written SQL)
+# ------------------------------------------------------------------ #
+
+
+def test_backtick_identifiers_are_accepted_and_rendered_as_double_quotes() -> None:
+    statement = validate_query("SELECT SUM(`Amount`) FROM `dataset` WHERE `State / City` = 'Delhi_Ncr'")
+
+    rendered = render_for_execution(statement, real_table_name="t1")
+
+    assert "`" not in rendered
+    assert '"State / City"' in rendered and '"t1"' in rendered
+
+
+def test_backticks_inside_string_literals_and_quoted_identifiers_are_untouched() -> None:
+    from app.utils.sql_utils import normalize_identifier_quotes
+
+    assert normalize_identifier_quotes("SELECT `a` FROM dataset WHERE b = 'it''s `x`'") == (
+        "SELECT \"a\" FROM dataset WHERE b = 'it''s `x`'"
+    )
+    assert normalize_identifier_quotes('SELECT "a`b" FROM dataset') == 'SELECT "a`b" FROM dataset'
+
+
+def test_backtick_normalization_does_not_bypass_validation() -> None:
+    with pytest.raises(QueryValidationError):
+        validate_query("DROP TABLE `dataset`")
+    with pytest.raises(QueryValidationError):
+        validate_query("SELECT * FROM `other_table`")

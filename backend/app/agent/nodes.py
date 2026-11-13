@@ -81,7 +81,7 @@ from app.schemas.analysis import (
 from app.schemas.visualization import ChartData
 from app.services.duckdb_service import get_duckdb_service
 from app.services.exceptions import DatasetServiceError, QueryValidationError
-from app.utils.sql_utils import validate_query
+from app.utils.sql_utils import validate_query, quote_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -293,11 +293,31 @@ def _format_schema_for_prompt(schema: DatasetSchema) -> str:
 
     Deliberately just column name + type -- not the table_name (an
     internal detail the model has no use for and should never see) and
-    not sample data (that would risk the model treating a handful of
+    not sample rows (that would risk the model treating a handful of
     example rows as more representative than they are).
+
+    The one exception is `sample_values`: for a low-cardinality text
+    column, DuckDBService.get_schema() attaches its full, closed set of
+    distinct values (never populated for anything high-cardinality, so
+    never row-level/PII data -- see _distinct_values' docstring). Without
+    it, two similarly-named columns that both look like "the state" but
+    use different labels for the same place are indistinguishable from
+    name + type alone, and the model has no way to know which one (or
+    which exact value) actually matches the user's question.
+
+    Column names are shown already double-quoted, exactly as they must be
+    written in SQL. Real datasets have names like `State / City` or
+    `Product Price`; unquoted, `State / City` parses as State divided by
+    City, and smaller models in particular copy names verbatim.
     """
 
-    return "\n".join(f"{column.name} ({column.type})" for column in schema.columns)
+    lines = []
+    for column in schema.columns:
+        line = f"{quote_identifier(column.name)} ({column.type})"
+        if column.sample_values:
+            line += f" -- values: {', '.join(column.sample_values)}"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def _current_step(state: WorkflowState) -> AnalysisStep:

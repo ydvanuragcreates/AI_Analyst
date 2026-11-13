@@ -1,0 +1,107 @@
+# Production deployment on a single VM: caddy (HTTPS) + api + worker + postgres + redis.
+#
+# Differences from docker-compose.yml (local dev):
+#   - Postgres and Redis are NOT published to the host -- only reachable
+#     inside the compose network. (The dev file exposes 5432/6379, which on
+#     a public VM would put an unauthenticated Redis on the internet.)
+#   - Postgres password comes from .env (POSTGRES_PASSWORD), not hardcoded.
+#   - The API is not published directly; Caddy terminates HTTPS on 80/443
+#     (automatic Let's Encrypt certificate for API_DOMAIN) and proxies to it.
+#     HTTPS is required because the Vercel frontend is served over HTTPS and
+#     browsers block calls from an HTTPS page to a plain-HTTP API.
+#   - restart: unless-stopped on every service, so a VM reboot brings it back.
+#
+# Usage (on the server, from the repo root, with .env filled in):
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml logs -f api worker
+
+x-backend-env: &backend-env
+  ENVIRONMENT: production
+  DATABASE_URL: postgresql+psycopg://ai_data_analyst:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/ai_data_analyst
+  REDIS_URL: redis://redis:6379/0
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ai_data_analyst
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ai_data_analyst
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ai_data_analyst"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # api and worker share the dataset_storage volume; DuckDB access across
+  # the two processes is serialized by DuckDBService's cross-process
+  # FileLock (storage/duckdb/*.lock), which works because both containers
+  # mount the same volume on the same host.
+  api:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'"
+    env_file:
+      - .env
+    environment: *backend-env
+    volumes:
+      - dataset_storage:/app/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+    env_file:
+      - .env
+    environment: *backend-env
+    volumes:
+      - dataset_storage:/app/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  redis_data:
+  dataset_storage:
+  caddy_data:
+  caddy_config:

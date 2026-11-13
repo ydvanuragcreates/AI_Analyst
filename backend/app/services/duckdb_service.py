@@ -61,6 +61,7 @@ from app.utils.sql_utils import render_for_execution, validate_query
 logger = logging.getLogger(__name__)
 
 _TABLE_NAME_PATTERN = re.compile(r"^dataset_[0-9a-f]{32}$")
+_MAX_DISTINCT_VALUES = 20
 
 
 class DuckDBService:
@@ -176,8 +177,41 @@ class DuckDBService:
                 raise DatasetNotFoundError(f"Dataset '{dataset_id}' was not found")
             described = connection.execute(f'DESCRIBE "{table_name}"').fetchall()
 
-        columns = [SchemaColumn(name=row[0], type=row[1]) for row in described]
+            columns = [
+                SchemaColumn(
+                    name=name,
+                    type=col_type,
+                    sample_values=(
+                        self._distinct_values(connection, table_name, name) if "VARCHAR" in col_type.upper() else None
+                    ),
+                )
+                for name, col_type in ((row[0], row[1]) for row in described)
+            ]
+
         return DatasetSchema(dataset_id=dataset_id, table_name=table_name, columns=columns)
+
+    def _distinct_values(self, connection: duckdb.DuckDBPyConnection, table_name: str, column_name: str) -> list[str] | None:
+        """The closed vocabulary of a low-cardinality text column, or None if it has too
+        many distinct values to qualify.
+
+        Exists so the SQL-generation prompt can disambiguate near-duplicate categorical
+        columns -- e.g. two columns that both look like "the state", one holding
+        "Delhi_Ncr" and the other "Delhi" for the same rows, is unresolvable from column
+        name + type alone and previously produced confidently wrong answers (the model
+        picks a column/value combination that happens not to match, gets a real-but-empty
+        result, and reports it as fact). Bounded at _MAX_DISTINCT_VALUES so this can only
+        ever reveal a short, closed set of category labels: a free-text column (customer
+        name, address) or an ID column will always exceed the cap and simply return None,
+        never exposing row-level or PII data.
+        """
+
+        rows = connection.execute(
+            f'SELECT DISTINCT "{column_name}" FROM "{table_name}" '
+            f'WHERE "{column_name}" IS NOT NULL LIMIT {_MAX_DISTINCT_VALUES + 1}'
+        ).fetchall()
+        if not rows or len(rows) > _MAX_DISTINCT_VALUES:
+            return None
+        return sorted(str(row[0]) for row in rows)
 
     def get_sample(self, dataset_id: str, rows: int) -> SampleDataResponse:
         table_name = self.get_table_name(dataset_id)

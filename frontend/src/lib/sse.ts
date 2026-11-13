@@ -36,10 +36,8 @@ export interface ConsumeSSEOptions {
 /**
  * Connect to a Server-Sent Events endpoint via `fetch` + a streamed
  * `ReadableStream`, rather than the native `EventSource` API --
- * `EventSource` cannot set custom request headers, and the backend's
- * stream endpoint (GET /api/v1/analysis/{id}/stream) requires
- * `Authorization: Bearer <token>` like every other v1 route (see
- * api/deps.py::get_current_user). This resolves once the stream ends
+ * `EventSource` cannot set custom request headers or be cancelled via
+ * an AbortSignal. This resolves once the stream ends
  * (server closed it, a terminal event was seen, or `signal` aborted).
  */
 export async function consumeSSE(url: string, options: ConsumeSSEOptions): Promise<void> {

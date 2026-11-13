@@ -1,5 +1,4 @@
 import { API_URL } from "@/lib/env";
-import { clearAuthSession, getAuthToken } from "@/stores/auth-store";
 import { ApiError, type LegacyErrorBody, type V1ErrorBody } from "@/types/api";
 
 // Intentionally `unknown`-valued (not a strict string/number/boolean
@@ -46,7 +45,7 @@ async function parseErrorBody(response: Response): Promise<ApiError> {
 function mapStatusToMessage(status: number): string {
   switch (status) {
     case 401:
-      return "Your session has expired. Please sign in again.";
+      return "The request was not authorized.";
     case 403:
       return "You don't have permission to do that.";
     case 404:
@@ -67,8 +66,6 @@ function mapStatusToMessage(status: number): string {
 export interface RequestOptions {
   params?: Record<string, unknown>;
   signal?: AbortSignal;
-  /** Skip attaching the Authorization header (login/register only). */
-  skipAuth?: boolean;
 }
 
 async function request<T>(method: string, path: string, body?: unknown, options: RequestOptions = {}): Promise<T> {
@@ -76,11 +73,6 @@ async function request<T>(method: string, path: string, body?: unknown, options:
   const isFormData = body instanceof FormData;
   if (body !== undefined && !isFormData) {
     headers["Content-Type"] = "application/json";
-  }
-
-  const token = options.skipAuth ? null : getAuthToken();
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
   }
 
   const response = await fetch(buildUrl(path, options.params), {
@@ -91,14 +83,7 @@ async function request<T>(method: string, path: string, body?: unknown, options:
   });
 
   if (!response.ok) {
-    const error = await parseErrorBody(response);
-    if (response.status === 401 && !options.skipAuth) {
-      // The session is no longer valid -- clear it so the app's route
-      // guard (components/auth/AuthGuard.tsx) redirects to /login rather
-      // than repeatedly retrying with a dead token.
-      clearAuthSession();
-    }
-    throw error;
+    throw await parseErrorBody(response);
   }
 
   if (response.status === 204) {

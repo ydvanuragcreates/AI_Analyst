@@ -584,10 +584,16 @@ async def checkpointer_context(database_url: str | None) -> AsyncIterator[BaseCh
     checkpoint tables if they don't exist yet -- LangGraph's own internal
     migration, separate from and in addition to Alembic's application
     schema), and closes the connection when the caller's `async with`
-    block exits. Falls back to a fresh InMemorySaver() (this call's
-    lifetime only -- explicitly NOT persistent) when no Postgres URL is
-    configured, so callers never have to branch on whether persistence is
-    available.
+    block exits.
+
+    Without Postgres (local SQLite mode) it yields ONE process-wide
+    InMemorySaver rather than a fresh one per call. A human-approval
+    pause and its resume run as two separate jobs; with a fresh saver per
+    call the resume found no checkpoint and LangGraph failed with "Must
+    write to at least one of [...]". Without Redis, jobs run in the API
+    process, so a shared saver lets them find each other's state. It is
+    still not durable: a backend restart loses paused analyses (the
+    worker reports that clearly instead of the LangGraph error).
     """
 
     if database_url and database_url.startswith("postgresql"):
@@ -595,4 +601,11 @@ async def checkpointer_context(database_url: str | None) -> AsyncIterator[BaseCh
             await checkpointer.setup()
             yield checkpointer
     else:
-        yield InMemorySaver()
+        yield _process_memory_saver()
+
+
+@lru_cache
+def _process_memory_saver() -> InMemorySaver:
+    """The single in-process checkpointer used when Postgres isn't configured."""
+
+    return InMemorySaver()

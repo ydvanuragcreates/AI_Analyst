@@ -44,8 +44,8 @@ into the parts that are easy to get wrong:
   tests them, and comes back with a reviewed, evidence-backed report.
 - **Low-confidence or expensive answers pause for a human** to approve
   before they're treated as final.
-- Built with the pieces a real production system would need: user
-  accounts, background job processing, real-time progress updates, rate
+- Built with the pieces a real production system would need:
+  background job processing, real-time progress updates, rate
   limiting, and a Docker setup to run it all together.
 
 ## Try it yourself
@@ -53,7 +53,19 @@ into the parts that are easy to get wrong:
 Two things need to run at once: the **backend** (the AI/data engine) and
 the **frontend** (the web page you actually click around in).
 
-**You'll need:** Python 3.11+, Node.js 18+, and an OpenAI API key.
+**You'll need:** Python 3.11+, Node.js 18+, and either a free local model
+via [Ollama](https://ollama.com) (for development/testing) or an OpenAI API
+key (the paid hosted model).
+
+**Choosing the model** -- one setting in `.env`, no code changes:
+
+| `LLM_PROVIDER` | Model | Needs |
+| --- | --- | --- |
+| `ollama` | `OLLAMA_MODEL` (default `qwen2.5:3b`) | Ollama running, then `ollama pull qwen2.5:3b` |
+| `openai` | `OPENAI_MODEL` | `OPENAI_API_KEY` |
+
+The small local model is for testing the app end to end. Expect simpler
+answers and more "needs approval" pauses than with the hosted model.
 
 ### 1. Start the backend
 
@@ -63,7 +75,7 @@ python -m venv .venv
 .venv\Scripts\activate        # Windows -- use `source .venv/bin/activate` on Mac/Linux
 pip install -r requirements-dev.txt
 
-cp ../.env.example ../.env    # then open .env and paste in your OPENAI_API_KEY
+cp ../.env.example ../.env    # then set LLM_PROVIDER (and OPENAI_API_KEY if using openai)
 uvicorn app.main:app --reload
 ```
 
@@ -83,20 +95,20 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) and sign up for an
-account.
+Open [http://localhost:3000](http://localhost:3000) -- there's no login;
+it goes straight to the dashboard.
 
-> **If sign-up fails:** the web app needs a small database to store
-> accounts, which isn't set up by the steps above. See
+> **If uploads or analyses fail:** the web app needs a small database to
+> store datasets and analyses, which isn't set up by the steps above. See
 > [Running the full stack locally, no Docker required](#running-the-full-stack-locally-no-docker-required)
 > below — it takes one command and doesn't need Postgres, Redis, or Docker
 > installed.
 
-Once you're in: upload a dataset, ask it a question, and watch it work.
+Then upload a dataset, ask it a question, and watch it work.
 
 ## Running the full stack locally, no Docker required
 
-The web app's login/accounts feature is normally backed by Postgres and
+The web app's datasets/analyses storage is normally backed by Postgres and
 Redis (see [Under the hood](#under-the-hood-for-engineers) for why). For
 local use, both have a genuine, tested fallback that needs nothing extra
 installed:
@@ -110,7 +122,7 @@ alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
-That's it — restart the backend and sign-up/login will work. One caveat:
+That's it — restart the backend and the web app will work. One caveat:
 live progress updates while an analysis runs need real Redis, so without
 it the app checks progress by refreshing instead of streaming it live.
 Everything else behaves the same.
@@ -201,9 +213,9 @@ Redis, live streaming, a separate background worker), see
   analysis now runs as a background Celery job
   (`POST /api/v1/analysis` returns `{"analysis_id", "status": "queued"}`
   immediately) with real-time progress over Server-Sent Events
-  (`GET /api/v1/analysis/{id}/stream`); JWT authentication + per-user
-  ownership on datasets/analyses (404, never leaking another user's
-  resource); Redis-backed, per-route, configurable rate limiting;
+  (`GET /api/v1/analysis/{id}/stream`); (authentication has since been
+  removed -- every request runs as one built-in local user, see
+  `backend/app/api/deps.py`); Redis-backed, per-route, configurable rate limiting;
   request IDs and structured (JSON in non-dev) logging; centralized
   `{"error": {"code","message","request_id"}}` error responses; basic
   dataset versioning, idempotency keys, cooperative job cancellation, and
@@ -277,7 +289,7 @@ pytest
 </details>
 
 <details>
-<summary><strong>The `/api/v1` surface (Phase 9+, authenticated) — click to expand</strong></summary>
+<summary><strong>The `/api/v1` surface (Phase 9+) — click to expand</strong></summary>
 
 Needs `DATABASE_URL` (Postgres in production) and `REDIS_URL` set to
 persist data / run jobs in the background — with `.env` unchanged from
@@ -288,33 +300,26 @@ back to Phase 1-8 behavior. See
 above for the local SQLite/no-Redis fallback path.
 
 ```bash
-# 1. Register + log in
-curl -X POST :8000/api/v1/auth/register -H 'Content-Type: application/json' \
-  -d '{"email": "you@example.com", "password": "supersecret123"}'
-# -> {"access_token": "...", "token_type": "bearer", "expires_in_minutes": 60}
+# 1. Upload a dataset (no login needed)
+curl -X POST :8000/api/v1/datasets -F file=@sales.csv
 
-TOKEN=<access_token from above>
-
-# 2. Upload a dataset (owned by you)
-curl -X POST :8000/api/v1/datasets -H "Authorization: Bearer $TOKEN" -F file=@sales.csv
-
-# 3. Create an analysis -- returns immediately, runs in the background
-curl -X POST :8000/api/v1/analysis -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+# 2. Create an analysis -- returns immediately, runs in the background
+curl -X POST :8000/api/v1/analysis -H 'Content-Type: application/json' \
   -d '{"dataset_id": "...", "question": "Which region has the highest revenue?"}'
 # -> 202 {"analysis_id": "...", "status": "queued"}
 
-# 4. Watch it live (needs real Redis -- see the no-Docker section above for the polling alternative)
-curl -N :8000/api/v1/analysis/<analysis_id>/stream -H "Authorization: Bearer $TOKEN"
+# 3. Watch it live (needs real Redis -- see the no-Docker section above for the polling alternative)
+curl -N :8000/api/v1/analysis/<analysis_id>/stream
 
-# 5. Or just poll
-curl :8000/api/v1/analysis/<analysis_id> -H "Authorization: Bearer $TOKEN"
+# 4. Or just poll
+curl :8000/api/v1/analysis/<analysis_id>
 
 # If it pauses for human approval:
-curl -X POST :8000/api/v1/analysis/<analysis_id>/approve -H "Authorization: Bearer $TOKEN" \
+curl -X POST :8000/api/v1/analysis/<analysis_id>/approve \
   -H 'Content-Type: application/json' -d '{"approved": true}'
 
 # Autonomous deep-analysis mode instead of a specific question (Phase 10):
-curl -X POST :8000/api/v1/analysis -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+curl -X POST :8000/api/v1/analysis -H 'Content-Type: application/json' \
   -d '{"dataset_id": "...", "mode": "deep"}'
 ```
 
