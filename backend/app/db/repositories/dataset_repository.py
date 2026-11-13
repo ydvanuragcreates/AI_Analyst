@@ -8,10 +8,11 @@ so the service layer maps either case to the same 404
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.dataset import Dataset
+from app.db.models.dataset_file import DatasetFile
 
 
 class DatasetRepository:
@@ -56,6 +57,27 @@ class DatasetRepository:
         )
         return list(result.scalars().all())
 
+    async def save_file(self, dataset_id: uuid.UUID, content: bytes) -> None:
+        """Keep the original upload bytes so the local copy can be rebuilt
+        after an ephemeral disk is wiped (see models/dataset_file.py)."""
+
+        self._session.add(DatasetFile(dataset_id=dataset_id, content=content))
+        await self._session.flush()
+
+    async def list_all_with_files(self) -> list[tuple[Dataset, bytes]]:
+        """Every dataset that has stored bytes, oldest first -- used only by
+        the startup restore (scripts/restore_datasets.py), never per request."""
+
+        result = await self._session.execute(
+            select(Dataset, DatasetFile.content)
+            .join(DatasetFile, DatasetFile.dataset_id == Dataset.id)
+            .order_by(Dataset.created_at)
+        )
+        return [(dataset, content) for dataset, content in result.all()]
+
     async def delete(self, dataset: Dataset) -> None:
+        # Explicit rather than relying on ON DELETE CASCADE: SQLite (tests)
+        # doesn't enforce foreign keys unless a pragma is set.
+        await self._session.execute(delete(DatasetFile).where(DatasetFile.dataset_id == dataset.id))
         await self._session.delete(dataset)
         await self._session.flush()

@@ -181,6 +181,50 @@ class DatasetService:
 
         return metadata
 
+    def restore_dataset(
+        self, *, dataset_id: str, filename: str, file_type: str, content: bytes, uploaded_at: datetime
+    ) -> bool:
+        """Rebuild a dataset's local copy (file, DuckDB table, metadata.json)
+        from its original bytes, under its existing id.
+
+        For hosts whose disk is wiped on restart while Postgres survives --
+        see scripts/restore_datasets.py, which calls this at startup.
+        Returns False (and does nothing) if the dataset is already present
+        locally. Same ordering and rollback rules as upload_dataset.
+        """
+
+        validated_id = str(uuid.UUID(dataset_id))
+        dataset_dir = self._dataset_dir(validated_id)
+        if (dataset_dir / METADATA_FILENAME).exists():
+            return False
+
+        if uploaded_at.tzinfo is None:  # SQLite returns naive datetimes; they are stored as UTC
+            uploaded_at = uploaded_at.replace(tzinfo=timezone.utc)
+
+        dataframe = self._parse_dataframe(file_type, content)
+        try:
+            dataset_dir.mkdir(parents=True, exist_ok=True)
+            (dataset_dir / f"{DATA_FILENAME_STEM}.{file_type}").write_bytes(content)
+        except OSError as exc:
+            raise DatasetStorageError(f"Failed to restore dataset {validated_id}") from exc
+
+        try:
+            self._duckdb_service.register_dataset(validated_id, dataframe)
+            metadata = self._build_metadata(
+                dataset_id=validated_id,
+                filename=filename,
+                file_type=file_type,
+                file_size=len(content),
+                dataframe=dataframe,
+                uploaded_at=uploaded_at,
+            )
+            self._write_metadata(dataset_dir, metadata)
+        except DatasetServiceError:
+            self._duckdb_service.unregister_dataset(validated_id)
+            shutil.rmtree(dataset_dir, ignore_errors=True)
+            raise
+        return True
+
     def list_datasets(self) -> list[DatasetMetadata]:
         if not self._storage_root.exists():
             return []
@@ -349,6 +393,7 @@ class DatasetService:
         file_type: str,
         file_size: int,
         dataframe: pd.DataFrame,
+        uploaded_at: datetime | None = None,
     ) -> DatasetMetadata:
         columns = [
             DatasetColumn(
@@ -370,7 +415,7 @@ class DatasetService:
             columns=columns,
             missing_values=missing_values,
             preview=DatasetPreview(_dataframe_preview(dataframe, self._preview_rows)),
-            uploaded_at=datetime.now(timezone.utc),
+            uploaded_at=uploaded_at or datetime.now(timezone.utc),
         )
 
 

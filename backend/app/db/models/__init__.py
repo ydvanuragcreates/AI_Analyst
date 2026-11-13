@@ -8,6 +8,7 @@ from app.db.models.analysis import Analysis, AnalysisMode, AnalysisStatus
 from app.db.models.analysis_job import AnalysisJob, JobStatus
 from app.db.models.analysis_message import AnalysisMessage
 from app.db.models.dataset import Dataset
+from app.db.models.dataset_file import DatasetFile
 from app.db.models.deep_analysis_result import DeepAnalysisResult
 from app.db.models.user import User
 
@@ -15,6 +16,7 @@ __all__ = [
     "Base",
     "User",
     "Dataset",
+    "DatasetFile",
     "Analysis",
     "AnalysisStatus",
     "AnalysisMode",

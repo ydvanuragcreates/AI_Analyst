@@ -91,6 +91,7 @@ async def upload_dataset_v1(
         file_hash=file_hash,
         version=version,
     )
+    await dataset_repo.save_file(dataset.id, content)
     await session.commit()
 
     logger.info(
