@@ -114,6 +114,13 @@ class AnalysisRepository:
         analysis = await self.get_owned(analysis_id, user_id)
         return analysis.job if analysis else None
 
+    async def count_created_since(self, since: datetime) -> int:
+        """All users' analyses created at or after `since` -- the global daily cap
+        (Settings.daily_analysis_limit) counts every caller, not just one owner."""
+
+        result = await self._session.execute(select(func.count(Analysis.id)).where(Analysis.created_at >= since))
+        return int(result.scalar_one())
+
     async def exists_for_dataset(self, dataset_id: uuid.UUID) -> bool:
         """Used before deleting a Dataset (see api/routes/datasets_v1.py)
         -- checked at the application level rather than relying on the

@@ -110,10 +110,13 @@ app.add_middleware(
 
 # Phase 1-8 routers, entirely unversioned and unchanged.
 app.include_router(health.router, prefix="/api", tags=["health"])
-app.include_router(agent.router, prefix="/api", tags=["agent"])
-app.include_router(datasets.router, prefix="/api/datasets", tags=["datasets"])
-app.include_router(analysis.router, prefix="/api/analysis", tags=["analysis"])
-app.include_router(approvals.router, prefix="/api/analysis", tags=["approvals"])
+# Off on public deployments (ENABLE_LEGACY_API=false): these call the LLM
+# synchronously with no daily cap, and the web app only uses /api/v1.
+if _settings.enable_legacy_api:
+    app.include_router(agent.router, prefix="/api", tags=["agent"])
+    app.include_router(datasets.router, prefix="/api/datasets", tags=["datasets"])
+    app.include_router(analysis.router, prefix="/api/analysis", tags=["analysis"])
+    app.include_router(approvals.router, prefix="/api/analysis", tags=["approvals"])
 
 # Phase 9 routers. NOT mounted as "/api/v1" duplicates of the routers
 # above -- /api/v1/analysis and /api/v1/datasets are genuinely different

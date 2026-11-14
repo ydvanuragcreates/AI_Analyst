@@ -20,7 +20,13 @@ from starlette.requests import Request
 
 from app.api.deps import PageParams, get_current_user
 from app.core.config import Settings, get_settings
-from app.core.errors import AnalysisNotFoundError, DatasetNotFoundError, IdempotencyConflictError, ValidationError
+from app.core.errors import (
+    AnalysisNotFoundError,
+    DailyLimitReachedError,
+    DatasetNotFoundError,
+    IdempotencyConflictError,
+    ValidationError,
+)
 from app.db.models.analysis import Analysis, AnalysisMode, AnalysisStatus
 from app.db.models.analysis_job import JobStatus
 from app.db.models.deep_analysis_result import DeepAnalysisResult
@@ -142,6 +148,15 @@ async def create_analysis_v1(
             else:
                 logger.info("Idempotent replay: returning existing analysis %s", existing.id)
                 return AnalysisJobResponse(analysis_id=existing.id, status=existing.status)
+
+    # Checked after the idempotent-replay path: replaying an existing job costs nothing.
+    if settings.daily_analysis_limit > 0:
+        start_of_day = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        if await analysis_repo.count_created_since(start_of_day) >= settings.daily_analysis_limit:
+            raise DailyLimitReachedError(
+                f"This demo allows {settings.daily_analysis_limit} analyses per day and today's limit has been "
+                "reached. Please try again tomorrow (the limit resets at 00:00 UTC)."
+            )
 
     try:
         analysis = await analysis_repo.create(

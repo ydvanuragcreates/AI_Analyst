@@ -94,6 +94,11 @@ class AgentExecutionError(AppError):
     status_code = 502
 
 
+class DailyLimitReachedError(AppError):
+    code = "DAILY_LIMIT_REACHED"
+    status_code = 429
+
+
 class RateLimitExceededError(AppError):
     code = "RATE_LIMIT_EXCEEDED"
     status_code = 429

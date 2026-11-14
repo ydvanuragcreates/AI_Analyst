@@ -83,6 +83,21 @@ class Settings(BaseSettings):
     db_pool_size: int = Field(default=5)
     db_max_overflow: int = Field(default=10)
     db_pool_timeout: int = Field(default=30)
+    daily_analysis_limit: int = Field(
+        default=0,
+        description="Max analyses created per UTC day across ALL users (0 = unlimited). Protects the LLM "
+        "budget on a public demo. Counted from the analyses table, so it survives restarts.",
+    )
+    dataset_retention_days: int = Field(
+        default=0,
+        description="Delete datasets (and their analyses) older than this many days at startup "
+        "(0 = keep forever). See services/retention.py.",
+    )
+    enable_legacy_api: bool = Field(
+        default=True,
+        description="Mount the unversioned Phase 1-8 routes (/api/agent, /api/datasets, /api/analysis). "
+        "They call the LLM synchronously and bypass the v1 limits; the web app only uses /api/v1.",
+    )
     db_disable_pooling: bool = Field(
         default=False,
         description="Open a fresh DB connection per session instead of pooling. Required when the "
