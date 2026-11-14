@@ -70,3 +70,18 @@ async def readiness(response: Response) -> dict[str, object]:
     if unhealthy:
         response.status_code = 503
     return {"status": "ready" if not unhealthy else "not_ready", "checks": checks}
+
+
+# TEMPORARY diagnostic (to be removed): shows which proxy headers carry the
+# caller's IP on the hosting platform, so client identification can use one
+# the caller can't spoof. Echoes only the caller's own connection details.
+from fastapi import Request  # noqa: E402
+
+
+@root_router.get("/health/_client-ip-debug", include_in_schema=False)
+async def client_ip_debug(request: Request) -> dict:
+    names = ("x-forwarded-for", "true-client-ip", "cf-connecting-ip", "x-real-ip", "forwarded", "x-envoy-external-address")
+    return {
+        "request_client_host": request.client.host if request.client else None,
+        "headers": {name: request.headers.get(name) for name in names if request.headers.get(name)},
+    }
