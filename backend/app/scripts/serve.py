@@ -35,6 +35,12 @@ os.environ.setdefault("PYTHONUNBUFFERED", "1")
 os.environ.setdefault("DAILY_ANALYSIS_LIMIT", "50")      # protects the OpenAI budget
 os.environ.setdefault("DATASET_RETENTION_DAYS", "7")     # keeps Neon under its free 0.5GB
 os.environ.setdefault("ENABLE_LEGACY_API", "false")      # uncapped sync LLM routes; web app uses /api/v1
+os.environ.setdefault("DAILY_ANALYSIS_LIMIT_PER_CLIENT", "5")   # one visitor can't use up the global cap
+os.environ.setdefault("DAILY_TOKEN_BUDGET", "1000000")          # ~all users' LLM tokens per UTC day
+os.environ.setdefault("DAILY_UPLOAD_LIMIT_PER_CLIENT", "10")
+# Render sits behind Cloudflare, which OVERWRITES True-Client-IP with the real
+# caller IP; X-Forwarded-For's leftmost entry is caller-controlled (verified).
+os.environ.setdefault("CLIENT_IP_HEADER", "true-client-ip")
 # Absolute paths: relative ones resolve against the project root (backend/'s
 # parent), which inside the image is "/" -- not writable.
 os.environ.setdefault("DATASET_STORAGE_PATH", "/app/storage/datasets")

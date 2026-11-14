@@ -27,6 +27,7 @@ import re
 from fastapi import Depends, Request
 
 from app.core.config import Settings, get_settings
+from app.core.client_ip import client_key
 from app.core.errors import RateLimitExceededError
 from app.services.redis_service import RedisService, get_redis_service
 
@@ -44,15 +45,16 @@ def _parse_limit(spec: str) -> tuple[int, int]:
     return int(count), _WINDOW_SECONDS[unit]
 
 
-def _client_identity(request: Request) -> str:
+def _client_identity(request: Request, settings: Settings) -> str:
     """Keyed by `request.state.user_id` when something upstream sets it;
     otherwise (every request, now that authentication is removed) by the
-    client IP."""
+    caller's hashed IP -- resolved by core/client_ip.py, NOT
+    request.client.host, which a caller can spoof via X-Forwarded-For."""
 
     user_id = getattr(request.state, "user_id", None)
     if user_id:
         return f"user:{user_id}"
-    return f"ip:{request.client.host if request.client else 'unknown'}"
+    return f"client:{client_key(request, settings)}"
 
 
 def rate_limit(bucket: str, limit_setting: str):
@@ -73,7 +75,7 @@ def rate_limit(bucket: str, limit_setting: str):
             return  # Redis not configured -- rate limiting disabled, not enforced-and-failing.
 
         limit, window_seconds = _parse_limit(getattr(settings, limit_setting))
-        identity = _client_identity(request)
+        identity = _client_identity(request, settings)
         key = f"ratelimit:{bucket}:{identity}"
 
         count = await redis_service.increment(key, ttl_seconds=window_seconds)

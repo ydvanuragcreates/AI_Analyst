@@ -14,14 +14,17 @@ import io
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import Headers
 
 from app.api.deps import get_current_user
 from app.core.config import get_settings
-from app.core.errors import DatasetNotFoundError, ValidationError
+from app.core.client_ip import client_key
+from app.core.errors import DailyLimitReachedError, DatasetNotFoundError, ValidationError
 from app.db.models.user import User
 from app.db.repositories.analysis_repository import AnalysisRepository
 from app.db.repositories.dataset_repository import DatasetRepository
@@ -53,6 +56,7 @@ def _quality_cache_key(dataset_id: uuid.UUID, version: int) -> str:
 
 @router.post("", response_model=DatasetV1Response, status_code=201, dependencies=[Depends(rate_limit("upload", "upload_rate_limit"))])
 async def upload_dataset_v1(
+    request: Request,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
@@ -66,6 +70,18 @@ async def upload_dataset_v1(
     the Postgres ownership/versioning row around it.
     """
 
+    settings = get_settings()
+    caller_key = client_key(request, settings)
+    dataset_repo = DatasetRepository(session)
+    per_client = settings.daily_upload_limit_per_client
+    if per_client > 0:
+        since = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        if await dataset_repo.count_created_since(since, client_key=caller_key) >= per_client:
+            raise DailyLimitReachedError(
+                f"You've used your {per_client} uploads for today on this demo. "
+                "Please try again tomorrow (limits reset at 00:00 UTC)."
+            )
+
     content = await file.read()
     file_hash = hashlib.sha256(content).hexdigest()
 
@@ -77,7 +93,6 @@ async def upload_dataset_v1(
     )
     metadata: DatasetMetadata = await dataset_service.upload_dataset(rebuilt)
 
-    dataset_repo = DatasetRepository(session)
     previous = await dataset_repo.get_latest_version_by_filename_owned(metadata.filename, current_user.id)
     version = previous.version + 1 if previous else 1
 
@@ -90,6 +105,7 @@ async def upload_dataset_v1(
         file_size=metadata.file_size,
         file_hash=file_hash,
         version=version,
+        client_key=caller_key,
     )
     await dataset_repo.save_file(dataset.id, content)
     await session.commit()

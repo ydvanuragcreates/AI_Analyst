@@ -8,7 +8,7 @@ so the service layer maps either case to the same 404
 
 import uuid
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.dataset import Dataset
@@ -21,11 +21,12 @@ class DatasetRepository:
 
     async def create(
         self, *, id: uuid.UUID, user_id: uuid.UUID, name: str, file_name: str, file_type: str,
-        file_size: int, file_hash: str, version: int = 1,
+        file_size: int, file_hash: str, version: int = 1, client_key: str | None = None,
     ) -> Dataset:
         dataset = Dataset(
             id=id, user_id=user_id, name=name, file_name=file_name,
             file_type=file_type, file_size=file_size, file_hash=file_hash, version=version,
+            client_key=client_key,
         )
         self._session.add(dataset)
         await self._session.flush()
@@ -56,6 +57,14 @@ class DatasetRepository:
             select(Dataset).where(Dataset.user_id == user_id).order_by(Dataset.created_at.desc())
         )
         return list(result.scalars().all())
+
+    async def count_created_since(self, since, *, client_key: str) -> int:
+        """Uploads by one visitor since `since` (per-visitor daily upload cap)."""
+
+        result = await self._session.execute(
+            select(func.count(Dataset.id)).where(Dataset.created_at >= since, Dataset.client_key == client_key)
+        )
+        return int(result.scalar_one())
 
     async def save_file(self, dataset_id: uuid.UUID, content: bytes) -> None:
         """Keep the original upload bytes so the local copy can be rebuilt

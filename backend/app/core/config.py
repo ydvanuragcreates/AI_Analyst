@@ -88,6 +88,27 @@ class Settings(BaseSettings):
         description="Max analyses created per UTC day across ALL users (0 = unlimited). Protects the LLM "
         "budget on a public demo. Counted from the analyses table, so it survives restarts.",
     )
+    daily_analysis_limit_per_client: int = Field(
+        default=0, description="Max analyses per visitor (hashed IP) per UTC day (0 = unlimited)."
+    )
+    daily_token_budget: int = Field(
+        default=0,
+        description="Stop accepting new analyses once today's recorded LLM tokens (all users) reach this "
+        "(0 = unlimited). Caps cost, not count: deep analyses use several times more tokens.",
+    )
+    daily_upload_limit_per_client: int = Field(
+        default=0, description="Max dataset uploads per visitor (hashed IP) per UTC day (0 = unlimited)."
+    )
+    client_ip_header: str = Field(
+        default="",
+        description="Header the hosting platform's edge sets to the real client IP (e.g. 'true-client-ip'). "
+        "Empty = not used. See core/client_ip.py.",
+    )
+    trusted_proxy_hops: int = Field(
+        default=0,
+        description="Number of our own proxies appending to X-Forwarded-For; the client IP is that many "
+        "entries from the right. 0 = not used. See core/client_ip.py.",
+    )
     dataset_retention_days: int = Field(
         default=0,
         description="Delete datasets (and their analyses) older than this many days at startup "

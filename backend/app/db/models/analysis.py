@@ -84,6 +84,10 @@ class Analysis(Base, TimestampMixin):
     token_usage: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     idempotency_key: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
+    client_key: Mapped[str | None] = mapped_column(
+        String(64), index=True, nullable=True,
+        doc="Hashed caller IP (core/client_ip.py) -- per-visitor daily limits; never the raw IP",
+    )
 
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

@@ -30,8 +30,10 @@ class AnalysisRepository:
         question: str,
         idempotency_key: str | None,
         mode: str = AnalysisMode.QA,
+        client_key: str | None = None,
     ) -> Analysis:
         analysis = Analysis(
+            client_key=client_key,
             user_id=user_id,
             dataset_id=dataset_id,
             dataset_version=dataset_version,
@@ -114,12 +116,22 @@ class AnalysisRepository:
         analysis = await self.get_owned(analysis_id, user_id)
         return analysis.job if analysis else None
 
-    async def count_created_since(self, since: datetime) -> int:
-        """All users' analyses created at or after `since` -- the global daily cap
-        (Settings.daily_analysis_limit) counts every caller, not just one owner."""
+    async def count_created_since(self, since: datetime, *, client_key: str | None = None) -> int:
+        """Analyses created at or after `since` -- by every caller (the global
+        daily cap), or only by one `client_key` (the per-visitor cap)."""
 
-        result = await self._session.execute(select(func.count(Analysis.id)).where(Analysis.created_at >= since))
-        return int(result.scalar_one())
+        query = select(func.count(Analysis.id)).where(Analysis.created_at >= since)
+        if client_key is not None:
+            query = query.where(Analysis.client_key == client_key)
+        return int((await self._session.execute(query)).scalar_one())
+
+    async def total_tokens_since(self, since: datetime) -> int:
+        """Sum of recorded LLM tokens (token_usage["total_tokens"]) for analyses
+        created at or after `since`. Summed in Python: JSON field access
+        differs between Postgres and SQLite, and this is at most a day's rows."""
+
+        rows = await self._session.execute(select(Analysis.token_usage).where(Analysis.created_at >= since))
+        return sum(int((usage or {}).get("total_tokens") or 0) for usage in rows.scalars())
 
     async def exists_for_dataset(self, dataset_id: uuid.UUID) -> bool:
         """Used before deleting a Dataset (see api/routes/datasets_v1.py)

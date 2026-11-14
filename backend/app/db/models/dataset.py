@@ -35,5 +35,10 @@ class Dataset(Base, TimestampMixin):
         String(64), nullable=False, doc="sha256 hex digest of the file content, used in cache keys"
     )
 
+    client_key: Mapped[str | None] = mapped_column(
+        String(64), index=True, nullable=True,
+        doc="Hashed uploader IP (core/client_ip.py) -- per-visitor daily upload limit; never the raw IP",
+    )
+
     user: Mapped["User"] = relationship(back_populates="datasets")
     analyses: Mapped[list["Analysis"]] = relationship(back_populates="dataset")

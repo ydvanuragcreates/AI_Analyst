@@ -20,6 +20,7 @@ from starlette.requests import Request
 
 from app.api.deps import PageParams, get_current_user
 from app.core.config import Settings, get_settings
+from app.core.client_ip import client_key
 from app.core.errors import (
     AnalysisNotFoundError,
     DailyLimitReachedError,
@@ -99,6 +100,33 @@ def _to_detail(analysis: Analysis) -> AnalysisDetailResponse:
     )
 
 
+def _start_of_utc_day() -> datetime:
+    return datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+async def _enforce_daily_analysis_limits(repo: AnalysisRepository, settings: Settings, caller_key: str) -> None:
+    """Public-demo budget guards (each 0 = off): per-visitor count, global
+    count, and global LLM token budget, all per UTC day and all counted in
+    Postgres so they survive restarts. Cheapest/most specific check first."""
+
+    since = _start_of_utc_day()
+    reset = "Please try again tomorrow (limits reset at 00:00 UTC)."
+
+    per_client = settings.daily_analysis_limit_per_client
+    if per_client > 0 and await repo.count_created_since(since, client_key=caller_key) >= per_client:
+        raise DailyLimitReachedError(f"You've used your {per_client} analyses for today on this demo. {reset}")
+
+    total = settings.daily_analysis_limit
+    if total > 0 and await repo.count_created_since(since) >= total:
+        raise DailyLimitReachedError(
+            f"This demo allows {total} analyses per day and today's limit has been reached. {reset}"
+        )
+
+    budget = settings.daily_token_budget
+    if budget > 0 and await repo.total_tokens_since(since) >= budget:
+        raise DailyLimitReachedError(f"This demo's AI usage budget for today has been used up. {reset}")
+
+
 @router.post("", response_model=AnalysisJobResponse, status_code=202, dependencies=[Depends(rate_limit("analysis", "analysis_rate_limit"))])
 async def create_analysis_v1(
     request: Request,
@@ -150,13 +178,8 @@ async def create_analysis_v1(
                 return AnalysisJobResponse(analysis_id=existing.id, status=existing.status)
 
     # Checked after the idempotent-replay path: replaying an existing job costs nothing.
-    if settings.daily_analysis_limit > 0:
-        start_of_day = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        if await analysis_repo.count_created_since(start_of_day) >= settings.daily_analysis_limit:
-            raise DailyLimitReachedError(
-                f"This demo allows {settings.daily_analysis_limit} analyses per day and today's limit has been "
-                "reached. Please try again tomorrow (the limit resets at 00:00 UTC)."
-            )
+    caller_key = client_key(request, settings)
+    await _enforce_daily_analysis_limits(analysis_repo, settings, caller_key)
 
     try:
         analysis = await analysis_repo.create(
@@ -167,6 +190,7 @@ async def create_analysis_v1(
             question=payload.question,
             idempotency_key=idempotency_key,
             mode=payload.mode,
+            client_key=caller_key,
         )
         await session.commit()
     except IntegrityError:
