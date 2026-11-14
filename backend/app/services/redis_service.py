@@ -18,8 +18,10 @@ as "feature disabled," not "crash," since Redis is optional in dev/tests.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from functools import lru_cache
+import threading
+import weakref
 
 import redis.asyncio as redis
 
@@ -86,12 +88,52 @@ class RedisService:
         await self._client.aclose()
 
 
-@lru_cache
-def get_redis_service() -> RedisService | None:
-    """FastAPI dependency: the process-wide RedisService, or None if
-    REDIS_URL isn't configured (see module docstring)."""
+_clients_by_loop: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, RedisService]" = weakref.WeakKeyDictionary()
+_clients_lock = threading.Lock()
+_api_client: RedisService | None = None
 
+
+def get_redis_service() -> RedisService | None:
+    """FastAPI dependency: a RedisService, or None if REDIS_URL isn't
+    configured (see module docstring).
+
+    One client per event loop, not one per process: a redis.asyncio
+    connection belongs to the loop that opened it, and the Celery worker
+    runs every task on its own fresh loop (workers/analysis_worker.py::
+    _run_async) -- reusing one process-wide client across those loops
+    fails. The API's loop still gets a single long-lived client. A loop's
+    client is dropped when the loop is garbage-collected.
+    """
+
+    global _api_client
     settings = get_settings()
     if not settings.redis_url:
         return None
-    return RedisService(redis.from_url(settings.redis_url, decode_responses=True))
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # Called with no loop running -- FastAPI resolves this (sync)
+        # dependency on a threadpool thread; the client it returns is then
+        # used on the API's own loop, so one shared client serves all of those.
+        loop = None
+    with _clients_lock:
+        if loop is None:
+            if _api_client is None:
+                _api_client = RedisService(redis.from_url(settings.redis_url, decode_responses=True))
+            return _api_client
+        service = _clients_by_loop.get(loop)
+        if service is None:
+            service = RedisService(redis.from_url(settings.redis_url, decode_responses=True))
+            _clients_by_loop[loop] = service
+        return service
+
+
+def _clear_clients() -> None:
+    global _api_client
+    with _clients_lock:
+        _clients_by_loop.clear()
+        _api_client = None
+
+
+# Kept for callers/tests that reset cached factories (same name as lru_cache's).
+get_redis_service.cache_clear = _clear_clients  # type: ignore[attr-defined]

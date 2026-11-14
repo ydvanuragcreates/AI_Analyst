@@ -83,6 +83,12 @@ class Settings(BaseSettings):
     db_pool_size: int = Field(default=5)
     db_max_overflow: int = Field(default=10)
     db_pool_timeout: int = Field(default=30)
+    db_disable_pooling: bool = Field(
+        default=False,
+        description="Open a fresh DB connection per session instead of pooling. Required when the "
+        "Celery worker runs inside the API process (app/scripts/serve.py): pooled async connections "
+        "belong to the event loop that opened them, and worker tasks each run on their own loop.",
+    )
 
     redis_url: str | None = Field(
         default=None,

@@ -48,7 +48,7 @@ def get_engine() -> AsyncEngine:
     # real Postgres in production runs the API and worker as genuinely
     # separate processes, each with its own engine and its own loop, so
     # this cross-loop-sharing concern never arises there).
-    if settings.database_url.startswith("sqlite"):
+    if settings.database_url.startswith("sqlite") or settings.db_disable_pooling:
         return create_async_engine(settings.database_url, poolclass=NullPool)
 
     return create_async_engine(

@@ -1,0 +1,27 @@
+# Render Blueprint: the backend as one free web service.
+# Postgres is external (Neon). Secrets marked `sync: false` are entered in
+# the Render dashboard when the Blueprint is created -- never committed.
+services:
+  - type: web
+    name: ai-analyst-api
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerContext: ./backend
+    dockerfilePath: ./deploy/render/Dockerfile
+    healthCheckPath: /health/live
+    autoDeploy: true
+    buildFilter:
+      paths:
+        - backend/app/**
+        - backend/alembic/**
+        - backend/alembic.ini
+        - backend/requirements.txt
+        - deploy/render/**
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
