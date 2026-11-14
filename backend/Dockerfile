@@ -34,7 +34,9 @@ RUN mkdir -p /app/storage/datasets /app/storage/duckdb \
 USER appuser
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    DATASET_STORAGE_PATH=/app/storage/datasets \
+    DUCKDB_PATH=/app/storage/duckdb/analytics.duckdb
 
 EXPOSE 8000
 
